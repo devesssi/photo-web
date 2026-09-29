@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .font-handwriting {
+    font-family: var(--font-caveat), cursive, sans-serif;
+  }
+  .font-mono-tech {
+    font-family: var(--font-space-mono), monospace;
+  }
+}
+
+body {
+  background-color: #FAF7EE;
+  color: #121212;
+}
