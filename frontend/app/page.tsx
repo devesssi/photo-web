@@ -1,7 +1,11 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Sparkles, Sliders, RefreshCw, Upload, Download, Aperture, Sun, SwitchCamera, Image as ImageIcon } from 'lucide-react';
+import { Camera, Sparkles, Sliders, RefreshCw, Upload, Download, Aperture, Sun, SwitchCamera, Image as ImageIcon, Crop as CropIcon } from 'lucide-react';
+import ReactCrop, { type Crop, centerCrop, makeAspectCrop } from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function Home() {
   const [cameraActive, setCameraActive] = useState(false);
@@ -12,6 +16,31 @@ export default function Home() {
   const [copilotData, setCopilotData] = useState<any>(null);
   const [enhancedImage, setEnhancedImage] = useState<string | null>(null);
   const [enhancing, setEnhancing] = useState(false);
+  const [crop, setCrop] = useState<Crop>();
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  const onImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const { width, height } = e.currentTarget;
+    const initialCrop = makeAspectCrop(
+      {
+        unit: '%',
+        width: 90,
+      },
+      4 / 5,
+      width,
+      height
+    );
+    const centeredCrop = centerCrop(initialCrop, width, height);
+    setCrop(centeredCrop);
+  };
+
+  const resetCrop = () => {
+    if (imgRef.current) {
+      const { width, height } = imgRef.current;
+      const initialCrop = makeAspectCrop({ unit: '%', width: 90 }, 4 / 5, width, height);
+      setCrop(centerCrop(initialCrop, width, height));
+    }
+  };
   const [shutterFlash, setShutterFlash] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -106,7 +135,7 @@ export default function Home() {
       const formData = new FormData();
       formData.append('file', blob, 'capture.jpg');
 
-      const response = await fetch('http://localhost:8000/api/v1/copilot/suggest-pose', {
+      const response = await fetch(`${API_BASE}/api/v1/copilot/suggest-pose`, {
         method: 'POST',
         body: formData,
       });
@@ -134,12 +163,44 @@ export default function Home() {
     }
   };
 
+  // Extract cropped image blob
+  const getCroppedBlob = async (image: HTMLImageElement, crop: Crop): Promise<Blob | null> => {
+    const canvas = document.createElement('canvas');
+    const scaleX = image.naturalWidth / image.width;
+    const scaleY = image.naturalHeight / image.height;
+    canvas.width = crop.width * scaleX;
+    canvas.height = crop.height * scaleY;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(
+      image,
+      crop.x * scaleX,
+      crop.y * scaleY,
+      crop.width * scaleX,
+      crop.height * scaleY,
+      0,
+      0,
+      crop.width * scaleX,
+      crop.height * scaleY
+    );
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.95);
+    });
+  };
+
   // Send Image to Darkroom Engine
   const handleEnhanceImage = async () => {
-    let blobToSend = capturedBlob;
-    if (!blobToSend && selectedImage) {
-      const res = await fetch(selectedImage);
-      blobToSend = await res.blob();
+    if (!selectedImage) return;
+
+    let blobToSend: Blob | null = null;
+    if (imgRef.current && crop && crop.width && crop.height) {
+      blobToSend = await getCroppedBlob(imgRef.current, crop);
+    } else {
+      blobToSend = capturedBlob;
+      if (!blobToSend) {
+        const res = await fetch(selectedImage);
+        blobToSend = await res.blob();
+      }
     }
     if (!blobToSend) return;
 
@@ -148,12 +209,13 @@ export default function Home() {
       const formData = new FormData();
       formData.append('file', blobToSend, 'capture.jpg');
 
-      const response = await fetch('http://localhost:8000/api/v1/darkroom/enhance', {
+      const response = await fetch(`${API_BASE}/api/v1/darkroom/enhance`, {
         method: 'POST',
         body: formData,
       });
       if (response.ok) {
         const imageBlob = await response.blob();
+        console.log("Darkroom enhanced blob received:", imageBlob.size);
         const url = URL.createObjectURL(imageBlob);
         setEnhancedImage(url);
       } else {
@@ -237,24 +299,45 @@ export default function Home() {
             </div>
 
             {/* 4:5 Camera Stream Viewfinder */}
-            <div className="relative border-4 border-[#121212] bg-black aspect-[4/5] overflow-hidden mb-4 group shadow-[4px_4px_0px_0px_#121212]">
+            <div className={`relative border-4 border-[#121212] bg-black ${!selectedImage ? 'aspect-[4/5] overflow-hidden' : 'p-2'} mb-4 group shadow-[4px_4px_0px_0px_#121212]`}>
               
               {/* Shutter White Flash Overlay */}
               {shutterFlash && <div className="absolute inset-0 bg-white z-30 transition-opacity duration-150" />}
 
               {selectedImage ? (
-                <img src={selectedImage} alt="Captured frame" className="w-full h-full object-cover" />
-              ) : (
-                <video ref={videoRef} playsInline autoPlay muted className="w-full h-full object-cover" />
-              )}
-
-              {/* Viewfinder Crosshairs & Frame Guide Overlay */}
-              <div className="absolute inset-0 border-2 border-white/30 pointer-events-none flex items-center justify-center">
-                <div className="w-12 h-12 border border-white/60 relative">
-                  <div className="absolute top-1/2 left-0 right-0 border-t border-white/60" />
-                  <div className="absolute left-1/2 top-0 bottom-0 border-l border-white/60" />
+                <div className="flex flex-col items-center w-full">
+                  <div className="mb-3 mt-1 bg-[#FFE600] border-2 border-[#121212] px-4 py-1.5 font-mono font-black text-xs uppercase shadow-[2px_2px_0px_0px_#121212]">
+                    DRAG & PINCH TO COMPOSE 4:5 EDITORIAL FRAME
+                  </div>
+                  <div className="border-2 border-black bg-white p-2 shadow-[4px_4px_0px_#121212] w-full flex justify-center">
+                    <ReactCrop
+                      crop={crop}
+                      onChange={(c) => setCrop(c)}
+                      aspect={4 / 5}
+                      className="max-w-full"
+                    >
+                      <img
+                        ref={imgRef}
+                        src={selectedImage}
+                        onLoad={onImageLoad}
+                        alt="Captured frame"
+                        className="max-h-[60vh] object-contain"
+                      />
+                    </ReactCrop>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <video ref={videoRef} playsInline autoPlay muted className="w-full h-full object-cover" />
+                  {/* Viewfinder Crosshairs & Frame Guide Overlay */}
+                  <div className="absolute inset-0 border-2 border-white/30 pointer-events-none flex items-center justify-center">
+                    <div className="w-12 h-12 border border-white/60 relative">
+                      <div className="absolute top-1/2 left-0 right-0 border-t border-white/60" />
+                      <div className="absolute left-1/2 top-0 bottom-0 border-l border-white/60" />
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Camera Flip Control Button */}
               <button
@@ -312,23 +395,34 @@ export default function Home() {
             </div>
 
             {/* Action Buttons */}
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={handleAnalyzePose}
-                disabled={!selectedImage || analyzing}
-                className="border-3 border-[#121212] bg-[#FFE600] hover:bg-[#ffe000] text-[#121212] font-bold py-3 px-3 shadow-[4px_4px_0px_0px_#121212] active:translate-x-1 active:translate-y-1 active:shadow-none transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
-              >
-                {analyzing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                1. POSE COPILOT
-              </button>
+            <div className="flex flex-col gap-3">
+              {selectedImage && (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={resetCrop}
+                    className="border-3 border-[#121212] bg-white hover:bg-gray-100 text-[#121212] font-bold py-2 px-3 shadow-[4px_4px_0px_0px_#121212] active:translate-x-1 active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
+                  >
+                    <CropIcon className="w-4 h-4" />
+                    RESET CROP
+                  </button>
+                  <button
+                    onClick={handleAnalyzePose}
+                    disabled={analyzing}
+                    className="border-3 border-[#121212] bg-[#FFE600] hover:bg-[#ffe000] text-[#121212] font-bold py-2 px-3 shadow-[4px_4px_0px_0px_#121212] active:translate-x-1 active:translate-y-1 active:shadow-none transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
+                  >
+                    {analyzing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    POSE COPILOT
+                  </button>
+                </div>
+              )}
 
               <button
                 onClick={handleEnhanceImage}
                 disabled={!selectedImage || enhancing}
-                className="border-3 border-[#121212] bg-[#FF4D2D] text-white hover:bg-[#e03e1f] font-bold py-3 px-3 shadow-[4px_4px_0px_0px_#121212] active:translate-x-1 active:translate-y-1 active:shadow-none transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
+                className="border-3 border-[#121212] bg-[#FF4D2D] text-white hover:bg-[#e03e1f] font-bold py-4 px-3 shadow-[4px_4px_0px_0px_#121212] active:translate-x-1 active:translate-y-1 active:shadow-none transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-sm uppercase tracking-wider w-full"
               >
-                {enhancing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sliders className="w-4 h-4" />}
-                2. DARKROOM ENHANCE
+                {enhancing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sliders className="w-5 h-5" />}
+                CONFIRM & DEVELOP IN DARKROOM
               </button>
             </div>
           </div>
